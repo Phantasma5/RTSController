@@ -151,6 +151,22 @@ public class RTSClient : MonoBehaviour
             updateCounter -= updatesPerHeartbeat;
         }
     }
+
+    public void Lock()
+    {
+        foreach (var hit in GameObject.FindGameObjectsWithTag("Unit"))
+        {
+            hit.GetComponent<UnityEngine.AI.NavMeshAgent>().speed = 0;
+        }
+    }
+
+    public void UnLock()
+    {
+        foreach (var hit in GameObject.FindGameObjectsWithTag("Unit"))
+        {
+            hit.GetComponent<UnityEngine.AI.NavMeshAgent>().speed = 3.5f;
+        }
+    }
 }
 
 

@@ -184,12 +184,14 @@ public class ServerNetwork : UCNetwork
             HashSet<long> messageIdentifiers = GetUniqueIdentifiers(msg);
             if (messageIdentifiers.Count >= clientData.Count)
             {
+                //CallRPC("UnLock", MessageReceiver.AllClients, -1);
                 ProcessImportantMessageData();
                 ProcessUnimportantMessageData();
                 base.FixedUpdate(msg, msgCount);
             }
             else
             {
+                //CallRPC("Lock", MessageReceiver.AllClients, -1);
                 Debug.Log("Message count doesn't match client count");
                 base.PartialFixedUpdate(msg, msgCount);
             }
@@ -2794,6 +2796,10 @@ public class ServerNetwork : UCNetwork
         {
             heldUnimportantMessages.Add(newMessage.Key, newMessage.Value);
         }
+        else
+        {
+            DiscardMessage(aMsg);
+        }
     }
 
     void ProcessUnimportantMessageData()
@@ -2808,10 +2814,17 @@ public class ServerNetwork : UCNetwork
         base.FixedUpdate(tempList, msgCount);
     }
 
-    void DiscardMessage(NetIncomingMessage aMsg)
-    {
-        connection.Recycle(aMsg);
-    }
+    //void DiscardMessage(NetIncomingMessage aMsg)
+    //{
+    //    try
+    //    {
+    //        connection.Recycle(aMsg);
+    //    }
+    //    catch(System.Exception e)
+    //    {
+    //        Debug.Log(e.Message);
+    //    }
+    //}
 }
 
 

@@ -272,7 +272,7 @@ public abstract class UCNetwork : MonoBehaviour
                     Debug.LogError("Unhandled network message type: " + msg[i].MessageType);
                     break;
             }
-            connection.Recycle(msg[i]);
+            DiscardMessage(msg[i]);
         }
 
         float deltaTime = (Time.realtimeSinceStartup - initialTime);
@@ -718,5 +718,17 @@ public abstract class UCNetwork : MonoBehaviour
             return netIdObjMap[aNetworkId].gameObject;
         }
         return null;
+    }
+
+    public void DiscardMessage(NetIncomingMessage aMsg)
+    {
+        try
+        {
+            connection.Recycle(aMsg);
+        }
+        catch (System.Exception e)
+        {
+            Debug.Log(e.Message);
+        }
     }
 }

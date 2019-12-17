@@ -27,7 +27,7 @@ public class ClientNetwork : UCNetwork
 
 #if UNITY_EDITOR
     float lastRPCCallClearTime;
-    int RPCCallWarningLevel = 20;
+    int RPCCallWarningLevel = 60;
     Dictionary<string, int> recentRPCCalls = new Dictionary<string, int>();
 #endif
 
