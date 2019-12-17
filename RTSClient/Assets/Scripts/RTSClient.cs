@@ -11,6 +11,9 @@ public class RTSClient : MonoBehaviour
     private bool loginInProcess = false;
     public GameObject loginScreen;
     public GameObject myPlayer;
+
+    public int updatesPerHeartbeat = 1;
+    private int updateCounter = 0;
     public static RTSClient GetInstance()
     {
         if (instance == null)
@@ -33,7 +36,7 @@ public class RTSClient : MonoBehaviour
             clientNet = (ClientNetwork)gameObject.AddComponent(typeof(ClientNetwork));
         }
     }
-    
+
     // Start the process to login to a server
     public void ConnectToServer(string aServerAddress, int aPort)
     {
@@ -42,7 +45,7 @@ public class RTSClient : MonoBehaviour
             return;
         }
         loginInProcess = true;
-        
+
         ClientNetwork.port = aPort;
         clientNet.Connect(aServerAddress, ClientNetwork.port, "", "", "", 0);
     }
@@ -104,7 +107,7 @@ public class RTSClient : MonoBehaviour
     {
         Debug.Log("OnNetStatusDisconnected called");
         SceneManager.LoadScene("Client");
-        
+
         loginInProcess = false;
 
         if (myPlayer)
@@ -135,6 +138,18 @@ public class RTSClient : MonoBehaviour
         // Tell the server we are ready
         GameObject temp = clientNet.Instantiate("BuildingPrefab", Vector3.zero, Quaternion.identity);
         temp.GetComponent<NetworkSync>().AddToArea(1);
+    }
+    private void FixedUpdate()
+    {
+        updateCounter++;
+        if (updateCounter > updatesPerHeartbeat)
+        {
+            if (clientNet.IsConnected())
+            {
+                clientNet.CallRPC("Heartbeat", UCNetwork.MessageReceiver.ServerOnly, -1, Lidgren.Network.NetDeliveryMethod.UnreliableSequenced);
+            }
+            updateCounter -= updatesPerHeartbeat;
+        }
     }
 }
 

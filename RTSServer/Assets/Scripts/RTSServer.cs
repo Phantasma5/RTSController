@@ -142,6 +142,11 @@ public class RTSServer : MonoBehaviour
         */
     }
 
+    public void Heartbeat()
+    {
+        return;
+    }
+
     // Request from the client to take a turn
     public void TakeTurn(int xPos, int yPos)
     {

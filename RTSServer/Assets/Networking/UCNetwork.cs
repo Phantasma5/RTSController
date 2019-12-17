@@ -99,7 +99,7 @@ public abstract class UCNetwork : MonoBehaviour
     }*/
 
     // Update is called once per frame
-    virtual public void Update()
+    virtual public void FixedUpdate()
     {
         // See if the network connection has been created
         if (connection == null)
@@ -122,6 +122,10 @@ public abstract class UCNetwork : MonoBehaviour
         int msgCount = connection.ReadMessages(msg);
         for (int i = 0; i < msgCount; i++)
         {
+
+        }
+        for (int i = 0; i < msgCount; i++)
+        {
             switch (msg[i].MessageType)
             {
                 // See https://code.google.com/p/lidgren-network-gen3/wiki/IncomingMessageTypes
@@ -133,6 +137,198 @@ public abstract class UCNetwork : MonoBehaviour
                     dataMessages++;
                     HandleMessage_Data(msg[i]);
                     break;
+                case NetIncomingMessageType.ConnectionApproval:
+                    connectionMessages++;
+                    HandleMessage_ConnectionApproval(msg[i]);
+                    break;
+                case NetIncomingMessageType.ConnectionLatencyUpdated:
+                    connectionMessages++;
+                    HandleMessage_ConnectionLatencyUpdated(msg[i]);
+                    break;
+
+                // Error/Warning messages
+                case NetIncomingMessageType.DebugMessage:
+                    debugMessage++;
+                    HandleMessage_DebugMessage(msg[i]);
+                    break;
+                case NetIncomingMessageType.VerboseDebugMessage:
+                    debugMessage++;
+                    HandleMessage_VerboseDebugMessage(msg[i]);
+                    break;
+                case NetIncomingMessageType.WarningMessage:
+                    warningMessages++;
+                    HandleMessage_WarningMessage(msg[i]);
+                    break;
+                case NetIncomingMessageType.ErrorMessage:
+                    errorMessages++;
+                    HandleMessage_ErrorMessage(msg[i]);
+                    break;
+
+                // Messages types we shouldn't have to deal with
+                case NetIncomingMessageType.Error:
+                case NetIncomingMessageType.UnconnectedData:
+                case NetIncomingMessageType.DiscoveryRequest:
+                case NetIncomingMessageType.DiscoveryResponse:
+                case NetIncomingMessageType.NatIntroductionSuccess:
+                case NetIncomingMessageType.Receipt:
+                default:
+                    otherMessages++;
+                    Debug.LogError("Unhandled network message type: " + msg[i].MessageType);
+                    break;
+            }
+            connection.Recycle(msg[i]);
+        }
+
+        float deltaTime = (Time.realtimeSinceStartup - initialTime);
+        int messagesProcessed = statusMessages + dataMessages + connectionMessages + debugMessage + warningMessages + errorMessages + otherMessages;
+        if (messagesProcessed >= 100 || deltaTime > 1.0f)
+        {
+            Debug.Log(GetTime() + ": NetTime:" + netTime + " " + messagesProcessed + " network messages proccessed in " + (Time.realtimeSinceStartup - initialTime).ToString() + " seconds" +
+                "\n\t statusMessages: " + statusMessages +
+                "\n\t dataMessages: " + dataMessages +
+                "\n\t connectionMessages: " + connectionMessages +
+                "\n\t debugMessage: " + debugMessage +
+                "\n\t warningMessages: " + warningMessages +
+                "\n\t errorMessages: " + errorMessages +
+                "\n\t otherMessages: " + otherMessages
+                );
+        }
+    }
+
+    virtual public void FixedUpdate(List<NetIncomingMessage> inputMessages, int inputCount)
+    {
+        // See if the network connection has been created
+        if (connection == null)
+        {
+            return;
+        }
+        float initialTime = Time.realtimeSinceStartup;
+        double netTime = GetTime();
+
+        int statusMessages = 0;
+        int dataMessages = 0;
+        int connectionMessages = 0;
+        int debugMessage = 0;
+        int warningMessages = 0;
+        int errorMessages = 0;
+        int otherMessages = 0;
+
+        // Read any new messages from the network
+        List<NetIncomingMessage> msg = inputMessages;
+        int msgCount = inputCount;
+        for (int i = 0; i < msgCount; i++)
+        {
+
+        }
+        for (int i = 0; i < msgCount; i++)
+        {
+            switch (msg[i].MessageType)
+            {
+                // See https://code.google.com/p/lidgren-network-gen3/wiki/IncomingMessageTypes
+                case NetIncomingMessageType.StatusChanged:
+                    statusMessages++;
+                    HandleMessage_StatusChanged(msg[i]);
+                    break;
+                case NetIncomingMessageType.Data:
+                    dataMessages++;
+                    HandleMessage_Data(msg[i]);
+                    break;
+                case NetIncomingMessageType.ConnectionApproval:
+                    connectionMessages++;
+                    HandleMessage_ConnectionApproval(msg[i]);
+                    break;
+                case NetIncomingMessageType.ConnectionLatencyUpdated:
+                    connectionMessages++;
+                    HandleMessage_ConnectionLatencyUpdated(msg[i]);
+                    break;
+
+                // Error/Warning messages
+                case NetIncomingMessageType.DebugMessage:
+                    debugMessage++;
+                    HandleMessage_DebugMessage(msg[i]);
+                    break;
+                case NetIncomingMessageType.VerboseDebugMessage:
+                    debugMessage++;
+                    HandleMessage_VerboseDebugMessage(msg[i]);
+                    break;
+                case NetIncomingMessageType.WarningMessage:
+                    warningMessages++;
+                    HandleMessage_WarningMessage(msg[i]);
+                    break;
+                case NetIncomingMessageType.ErrorMessage:
+                    errorMessages++;
+                    HandleMessage_ErrorMessage(msg[i]);
+                    break;
+
+                // Messages types we shouldn't have to deal with
+                case NetIncomingMessageType.Error:
+                case NetIncomingMessageType.UnconnectedData:
+                case NetIncomingMessageType.DiscoveryRequest:
+                case NetIncomingMessageType.DiscoveryResponse:
+                case NetIncomingMessageType.NatIntroductionSuccess:
+                case NetIncomingMessageType.Receipt:
+                default:
+                    otherMessages++;
+                    Debug.LogError("Unhandled network message type: " + msg[i].MessageType);
+                    break;
+            }
+            connection.Recycle(msg[i]);
+        }
+
+        float deltaTime = (Time.realtimeSinceStartup - initialTime);
+        int messagesProcessed = statusMessages + dataMessages + connectionMessages + debugMessage + warningMessages + errorMessages + otherMessages;
+        if (messagesProcessed >= 100 || deltaTime > 1.0f)
+        {
+            Debug.Log(GetTime() + ": NetTime:" + netTime + " " + messagesProcessed + " network messages proccessed in " + (Time.realtimeSinceStartup - initialTime).ToString() + " seconds" +
+                "\n\t statusMessages: " + statusMessages +
+                "\n\t dataMessages: " + dataMessages +
+                "\n\t connectionMessages: " + connectionMessages +
+                "\n\t debugMessage: " + debugMessage +
+                "\n\t warningMessages: " + warningMessages +
+                "\n\t errorMessages: " + errorMessages +
+                "\n\t otherMessages: " + otherMessages
+                );
+        }
+    }
+
+    public void PartialFixedUpdate(List<NetIncomingMessage> input, int inputCount)
+    {
+        // See if the network connection has been created
+        if (connection == null)
+        {
+            return;
+        }
+        float initialTime = Time.realtimeSinceStartup;
+        double netTime = GetTime();
+
+        int statusMessages = 0;
+        int dataMessages = 0;
+        int connectionMessages = 0;
+        int debugMessage = 0;
+        int warningMessages = 0;
+        int errorMessages = 0;
+        int otherMessages = 0;
+
+        // Read any new messages from the network
+        List<NetIncomingMessage> msg = input;
+        int msgCount = inputCount;
+        for (int i = 0; i < msgCount; i++)
+        {
+
+        }
+        for (int i = 0; i < msgCount; i++)
+        {
+            switch (msg[i].MessageType)
+            {
+                // See https://code.google.com/p/lidgren-network-gen3/wiki/IncomingMessageTypes
+                case NetIncomingMessageType.StatusChanged:
+                    statusMessages++;
+                    HandleMessage_StatusChanged(msg[i]);
+                    break;
+                case NetIncomingMessageType.Data:
+                    dataMessages++;
+                    HandleSomeMessage_Data(msg[i]);
+                    continue;
                 case NetIncomingMessageType.ConnectionApproval:
                     connectionMessages++;
                     HandleMessage_ConnectionApproval(msg[i]);
@@ -237,7 +433,8 @@ public abstract class UCNetwork : MonoBehaviour
             {
                 typeString += "a";
             }
-            else {
+            else
+            {
                 Debug.LogError("Unimplemented RPC parameter type " + arg.GetType());
                 return;
             }
@@ -290,13 +487,14 @@ public abstract class UCNetwork : MonoBehaviour
             {
                 int[] temp = (int[])arg;
                 aMsg.Write(temp.Length);
-                foreach(int a in temp)
+                foreach (int a in temp)
                 {
                     aMsg.Write(a);
                 }
             }
         }
     }
+
     protected void ReadRPCParams(ref List<object> aArgs, ref NetIncomingMessage aMsg)
     {
         string argDef = aMsg.ReadString();
@@ -345,13 +543,14 @@ public abstract class UCNetwork : MonoBehaviour
             {
                 int length = aMsg.ReadInt32();
                 int[] temp = new int[length];
-                for(int i=0; i<length; i++)
+                for (int i = 0; i < length; i++)
                 {
                     temp[i] = aMsg.ReadInt32();
                 }
                 aArgs.Add(temp);
             }
-            else {
+            else
+            {
                 Debug.LogError("Unhandled RPC parameter type " + c);
             }
         }
@@ -372,11 +571,14 @@ public abstract class UCNetwork : MonoBehaviour
     // Are we currently connected to another machine
     public bool IsConnected()
     {
+        //connection.Connections[0].Status
         return connection.ConnectionsCount != 0;
     }
 
     // These methods should be overridden by the server/client classes
     abstract protected void HandleMessage_Data(NetIncomingMessage aMsg);
+    abstract protected void HandleMessage_Data(NetIncomingMessage aMsg, MessageType aType);
+    abstract protected bool HandleSomeMessage_Data(NetIncomingMessage aMsg);
     abstract protected void HandleMessage_ConnectionApproval(NetIncomingMessage aMsg);
     abstract protected void HandleMessage_ConnectionLatencyUpdated(NetIncomingMessage aMsg);
 

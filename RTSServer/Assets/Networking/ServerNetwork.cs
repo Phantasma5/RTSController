@@ -116,6 +116,9 @@ public class ServerNetwork : UCNetwork
     public long SendingClientId { get { return sendingClientId; } }
     long sendingClientId = 0;
 
+    static List<NetIncomingMessage> heldImportantMessages = new List<NetIncomingMessage>();
+    static Dictionary<int, NetIncomingMessage> heldUnimportantMessages = new Dictionary<int, NetIncomingMessage>();
+
     // Called externally to abort calling a RPC on the clients (in the case that the RPC is other clients & server)
     public bool AbortRPC
     {
@@ -172,9 +175,42 @@ public class ServerNetwork : UCNetwork
     }
 
     // Update is called once per frame
-    override public void Update()
+    override public void FixedUpdate()
     {
-        base.Update();
+        if (true)//(clientData.Count > 1)
+        {
+            List<NetIncomingMessage> msg = new List<NetIncomingMessage>();
+            int msgCount = connection.ReadMessages(msg);
+            HashSet<long> messageIdentifiers = GetUniqueIdentifiers(msg);
+            if (messageIdentifiers.Count >= clientData.Count)
+            {
+                ProcessImportantMessageData();
+                ProcessUnimportantMessageData();
+                base.FixedUpdate(msg, msgCount);
+            }
+            else
+            {
+                Debug.Log("Message count doesn't match client count");
+                base.PartialFixedUpdate(msg, msgCount);
+            }
+        }
+    }
+
+    HashSet<long> GetUniqueIdentifiers(List<NetIncomingMessage> input)
+    {
+        HashSet<long> returnMe = new HashSet<long>();
+        foreach (var i in input)
+        {
+            try
+            {
+                returnMe.Add(i.SenderConnection.RemoteUniqueIdentifier);
+            }
+            catch
+            {
+                //do something
+            }
+        }
+        return returnMe;
     }
 
     // Function called when we get a status changed message
@@ -231,7 +267,7 @@ public class ServerNetwork : UCNetwork
                     // Transfer ownership of the objects that do not follow the client
                     foreach (int areaId in areaIds)
                     {
-                        //FindNewOwners(clientData[i], areaId);
+                        FindNewOwners(clientData[i], areaId);
                     }
 
                     // Destroy any objects that are going away with this client
@@ -289,7 +325,7 @@ public class ServerNetwork : UCNetwork
             {
                 ReceiveRPC(aMsg);
             }
-            
+
             // Check if the server wants to stop the RPC from being sent to the clients
             if (!abortRPC)
             {
@@ -445,7 +481,7 @@ public class ServerNetwork : UCNetwork
             {
                 clients = GetClientsInArea(networkObjects[netId].areaIds);
                 // Remove our own client from the list
-                for (int i=0; i<clients.Count; i++)
+                for (int i = 0; i < clients.Count; i++)
                 {
                     if (clients[i].RemoteUniqueIdentifier == aMsg.SenderConnection.RemoteUniqueIdentifier)
                     {
@@ -799,6 +835,608 @@ public class ServerNetwork : UCNetwork
         }
     }
 
+    protected override void HandleMessage_Data(NetIncomingMessage aMsg, MessageType aType)
+    {
+        // Data has just been sent from a client, what to do with it...
+        // Check what kind of message this is
+        List<NetConnection> clients;
+        MessageType type = aType;
+        sendingClientId = aMsg.SenderConnection.RemoteUniqueIdentifier;
+
+        if (dataMessageCount.ContainsKey(type))
+        {
+            dataMessageCount[type]++;
+        }
+        else
+        {
+            dataMessageCount[type] = 0;
+        }
+
+        if (type == MessageType.RPC)
+        {
+            // Structure for a RPC:
+            // Int - MessageType
+            // Int - MessageReceiver
+            // Int - Object Network Id
+            // String - Function Name
+            // String - Arguments contained in the rest of the message (ex. "iissf" - int, int, string, string, float)
+            // [Int, String, Float, Vector3, Quaternion] - Arguments
+
+            LogRPC(aMsg);
+
+            // Create the outgoing message
+            NetOutgoingMessage sendMsg = server.CreateMessage();
+
+            // Determine who it should go to
+            MessageReceiver receiver = (MessageReceiver)aMsg.ReadUInt32();
+            int networkId = aMsg.PeekInt32();
+
+            // If this RPC includes server only, make that call first
+            abortRPC = false;
+            if (((int)receiver & (int)MessageReceiver.ServerOnly) != 0)
+            {
+                ReceiveRPC(aMsg);
+            }
+
+            // Check if the server wants to stop the RPC from being sent to the clients
+            if (!abortRPC)
+            {
+                if (((int)receiver & (int)MessageReceiver.AllClients) != 0)
+                {
+                    sendMsg.Write(aMsg);
+                    server.SendToAll(sendMsg, NetDeliveryMethod.ReliableOrdered);
+                }
+                else if (((int)receiver & (int)MessageReceiver.AllClientsInArea) != 0)
+                {
+                    sendMsg.Write(aMsg);
+                    NetworkObject netObj = GetNetObjById(networkId);
+                    if (netObj == null)
+                    {
+                        Debug.LogWarning("RPC sent to area for unknown network object " + networkId + ". Telling the client to destroy it.");
+                        NetOutgoingMessage msg = server.CreateMessage();
+                        msg.Write((int)MessageType.Destroy);
+                        msg.Write(networkId);
+                        server.SendMessage(msg, aMsg.SenderConnection, NetDeliveryMethod.ReliableOrdered, 0);
+                        return;
+                    }
+                    clients = GetClientsInArea(netObj.areaIds);
+                    if (clients.Count > 0)
+                    {
+                        server.SendMessage(sendMsg, clients, NetDeliveryMethod.ReliableOrdered, 0);
+                    }
+                }
+                else if (((int)receiver & (int)MessageReceiver.OtherClients) != 0)
+                {
+                    sendMsg.Write(aMsg);
+                    server.SendToAll(sendMsg, aMsg.SenderConnection, NetDeliveryMethod.ReliableOrdered, 0);
+                }
+                else if (((int)receiver & (int)MessageReceiver.OtherClientsInArea) != 0)
+                {
+                    sendMsg.Write(aMsg);
+                    clients = GetClientsInArea(aMsg.SenderConnection.RemoteUniqueIdentifier, false);
+                    if (clients.Count > 0)
+                    {
+                        server.SendMessage(sendMsg, clients, NetDeliveryMethod.ReliableOrdered, 0);
+                    }
+                }
+                else if (((int)receiver & (int)MessageReceiver.ServerOnly) != 0)
+                {
+                    // If the message is sent only to the server, it should have already been received above
+                }
+                else
+                {
+                    Debug.LogError("RPC call sent to unknown MessageReceiver type");
+                }
+            }
+
+        }
+        else if (type == MessageType.SyncUpdate || type == MessageType.LiteSyncUpdate)
+        {
+            if (type == MessageType.LiteSyncUpdate)
+            {
+                LogText("LiteSyncUpdate " + aMsg.SenderConnection.RemoteUniqueIdentifier + " " + aMsg.SenderConnection.RemoteEndPoint.Address);
+            }
+            else
+            {
+                LogText("SyncUpdate " + aMsg.SenderConnection.RemoteUniqueIdentifier + " " + aMsg.SenderConnection.RemoteEndPoint.Address);
+            }
+
+            // Structure for a Sync Update:
+            // Int - MessageType
+            // Int - MessageReceiver
+            // Int - Object Network Id
+            // 3 Floats - Vector3 - Position
+            // 4 Floats - Quaternion - Rotation
+            // Int - Length of the byte data
+            // Byte[] - data
+
+            MessageReceiver receiver = (MessageReceiver)aMsg.ReadUInt32();
+
+            // Update our own record of the sync data
+            int netId = aMsg.ReadInt32();
+
+            NetOutgoingMessage sendMsg;
+            // Get the client who sent this message
+            foreach (ClientData data in clientData)
+            {
+                if (data.networkIdentifier == aMsg.SenderConnection.RemoteUniqueIdentifier)
+                {
+                    // Make sure the client owns the object
+                    if (!data.ownedObjects.Contains(netId))
+                    {
+                        //Debug.LogError("Getting sync data from client " + aMsg.SenderConnection.RemoteUniqueIdentifier + " for object " + netId + " which they don't own");
+
+                        // Send the client a message saying they dont own the object
+                        sendMsg = server.CreateMessage();
+                        sendMsg.Write((int)MessageType.OwnershipLost);
+                        sendMsg.Write(netId);
+                        server.SendMessage(sendMsg, data.connection, NetDeliveryMethod.UnreliableSequenced, UCNetwork.SyncSequenceChannel);
+
+                        return;
+                    }
+                }
+            }
+            Vector3 position = new Vector3();
+            Quaternion orientation = new Quaternion();
+            if (type == MessageType.SyncUpdate)
+            {
+                //Position and rotation received
+                float x = aMsg.ReadFloat();
+                float y = aMsg.ReadFloat();
+                float z = aMsg.ReadFloat();
+                position = new Vector3(x, y, z);
+
+                networkObjects[netId].position = position;
+
+                x = aMsg.ReadFloat();
+                y = aMsg.ReadFloat();
+                z = aMsg.ReadFloat();
+                float w = aMsg.ReadFloat();
+                orientation = new Quaternion(x, y, z, w);
+
+                networkObjects[netId].rotation = orientation;
+            }
+            int byteLength = aMsg.ReadInt32();
+            byte[] byteData = aMsg.ReadBytes(byteLength);
+
+            if (!networkObjects.ContainsKey(netId))
+            {
+                //Debug.LogError("Unable to update sync data for unknown object " + netId);
+                return;
+            }
+
+
+
+            networkObjects[netId].latestSyncData = byteData;
+
+            if (!netObjsToSync.ContainsKey(netId))
+            {
+                ObjectSyncData data = new ObjectSyncData();
+                data.objectId = netId;
+                data.receiver = receiver;
+                data.client = aMsg.SenderConnection.RemoteUniqueIdentifier;
+
+                netObjsToSync[netId] = data;
+            }
+
+            // Send the sync data to the other clients
+            sendMsg = server.CreateMessage();
+            sendMsg.Write(aMsg);
+
+            // Who should this update be sent to
+            if (receiver == MessageReceiver.OtherClients)
+            {
+                server.SendToAll(sendMsg, aMsg.SenderConnection, NetDeliveryMethod.UnreliableSequenced, 0);
+
+            }
+            else if (receiver == MessageReceiver.OtherClientsInArea)
+            {
+                clients = GetClientsInArea(networkObjects[netId].areaIds);
+                // Remove our own client from the list
+                for (int i = 0; i < clients.Count; i++)
+                {
+                    if (clients[i].RemoteUniqueIdentifier == aMsg.SenderConnection.RemoteUniqueIdentifier)
+                    {
+                        clients.RemoveAt(i);
+                    }
+                }
+                if (clients.Count > 0)
+                {
+                    server.SendMessage(sendMsg, clients, NetDeliveryMethod.UnreliableSequenced, 0);
+                }
+            }
+            else
+            {
+                Debug.LogError("Unsupported MessageReceiver sent to SyncUpdate: " + receiver);
+            }
+
+        }
+        else if (type == MessageType.Instantiate)
+        {
+            // Structure for a Intantiate message:
+            // Int - MessageType
+            // Int - The network id
+            // String - Prefab name
+            // Float - Pos x
+            // Float - Pos y
+            // Float - Pos z
+            // Float - Quaternion x
+            // Float - Quaternion y
+            // Float - Quaternion z
+            // Float - Quaternion w
+
+            int networkId = aMsg.ReadInt32();
+            string prefabName = aMsg.ReadString();
+            float posX = aMsg.ReadFloat();
+            float posY = aMsg.ReadFloat();
+            float posZ = aMsg.ReadFloat();
+            float oriX = aMsg.ReadFloat();
+            float oriY = aMsg.ReadFloat();
+            float oriZ = aMsg.ReadFloat();
+            float oriW = aMsg.ReadFloat();
+
+            LogText("Instantiate " + aMsg.SenderConnection.RemoteUniqueIdentifier + " " + aMsg.SenderConnection.RemoteEndPoint.Address
+                + "\n\tNetworkId: " + networkId.ToString()
+                + "\n\tPrefab: " + prefabName
+                + "\n\tLoc: " + posX.ToString() + ", " + posY.ToString() + ", " + posZ.ToString()
+                + "\n\tOrientation: " + oriX.ToString() + ", " + oriY.ToString() + ", " + oriZ.ToString() + ", " + oriW.ToString()
+                );
+
+            Vector3 position = new Vector3(posX, posY, posZ);
+            Quaternion rotation = new Quaternion(oriX, oriY, oriZ, oriW);
+
+            foreach (ClientData data in clientData)
+            {
+                if (data.networkIdentifier == aMsg.SenderConnection.RemoteUniqueIdentifier)
+                {
+                    data.numberOfIds--;
+
+                    // Should we issue more ids?
+                    if (data.numberOfIds < issuedIdRange / 2)
+                    {
+                        IssueNetworkIds(aMsg.SenderConnection);
+                    }
+                    break;
+                }
+            }
+
+            InstantiateNetworkObject(prefabName, position, rotation, aMsg.SenderConnection.RemoteUniqueIdentifier, networkId, false, "");
+
+        }
+        else if (type == MessageType.AddToArea)
+        {
+            LogText("AreaChange " + aMsg.SenderConnection.RemoteUniqueIdentifier + " " + aMsg.SenderConnection.RemoteEndPoint.Address);
+
+            // Structure for an area change:
+            // Int - MessageType
+            // Int - New area Id
+            int newAreaId = aMsg.ReadInt32();
+            AddToArea(aMsg.SenderConnection.RemoteUniqueIdentifier, newAreaId);
+        }
+        else if (type == MessageType.RemoveFromArea)
+        {
+            // Structure for an area change:
+            // Int - MessageType
+            // Int - old area Id
+            int oldAreaId = aMsg.ReadInt32();
+            RemoveFromArea(aMsg.SenderConnection.RemoteUniqueIdentifier, oldAreaId);
+        }
+        else if (type == MessageType.AddObjectToArea)
+        {
+            // Structure for an object area change:
+            // Int - MessageType
+            // Int - object Id
+            // Int - new area Id
+            int networkId = aMsg.ReadInt32();
+            int newAreaId = aMsg.ReadInt32();
+            AddObjectToArea(networkId, newAreaId);
+        }
+        else if (type == MessageType.RemoveObjectFromArea)
+        {
+            // Structure for an object area change:
+            // Int - MessageType
+            // Int - object Id
+            // Int - old area Id
+            int networkId = aMsg.ReadInt32();
+            int oldAreaId = aMsg.ReadInt32();
+            RemoveObjectFromArea(networkId, oldAreaId);
+        }
+        else if (type == MessageType.Destroy)
+        {
+            LogText("Destroy " + aMsg.SenderConnection.RemoteUniqueIdentifier + " " + aMsg.SenderConnection.RemoteEndPoint.Address);
+
+            int objectId = aMsg.ReadInt32();
+
+            // Verify that the owner sent this message
+            if (!networkObjects.ContainsKey(objectId))
+            {
+                //Debug.LogError("Server was asked to destroy unknown object " + objectId + " from client " + aMsg.SenderConnection.RemoteUniqueIdentifier);
+                return;
+            }
+            else
+            {
+                Debug.Log("Request to destroy object " + objectId);
+            }
+
+            // Make sure only the owner can destroy
+            foreach (ClientData data in clientData)
+            {
+                if (data.ownedObjects.Contains(objectId))
+                {
+                    if (aMsg.SenderConnection.RemoteUniqueIdentifier != data.networkIdentifier)
+                    {
+                        Debug.LogWarning("Client " + aMsg.SenderConnection.RemoteUniqueIdentifier + " requested to destroy object " + objectId + " which it does not own");
+                    }
+                    break;
+                }
+            }
+
+            // Make sure this isn't a scene object
+            if (networkObjects[objectId].sceneObject)
+            {
+                Debug.LogError("Client requested to destroy scene object " + objectId + " which is not supported");
+                return;
+            }
+
+            // Destroy the object
+            DestroyNetObject(objectId);
+        }
+        else if (type == MessageType.VoiceData)
+        {
+            LogText("VoiceData " + aMsg.SenderConnection.RemoteUniqueIdentifier + " " + aMsg.SenderConnection.RemoteEndPoint.Address);
+
+            // Structure for a voice data message
+            // Int - MessageType
+            // Int - Compression Type
+            // Int - Data Length
+            // byte[] - Data
+            // Int - Voice Data Id (Unique id assigned by the VoIPManager)
+
+            int networkObjectId = aMsg.ReadInt32();
+            int compressionType = aMsg.ReadInt32();
+            int voiceId = aMsg.ReadInt32();
+            int channel = aMsg.ReadInt32();
+            int length = aMsg.ReadInt32();
+            byte[] data = aMsg.ReadBytes(length);
+
+            NetOutgoingMessage sendMsg = server.CreateMessage();
+            sendMsg.Write(aMsg);
+
+            List<long> clientList = new List<long>();//voipManager.GetClientsForVoiceChat(networkObjectId, (VoiceChatChannel)channel);
+
+            clients = new List<NetConnection>();
+
+            foreach (NetConnection con in server.Connections)
+            {
+                if (clientList.Contains(con.RemoteUniqueIdentifier) && con.RemoteUniqueIdentifier != sendingClientId)
+                {
+                    clients.Add(con);
+                }
+            }
+
+            if (clients.Count > 0)
+            {
+                NetOutgoingMessage globalMessage = server.CreateMessage();
+                globalMessage.Write((int)MessageType.VoiceData);
+                globalMessage.Write(networkObjectId);
+                globalMessage.Write(compressionType);
+                globalMessage.Write(voiceId);
+                globalMessage.Write((int)1);
+                globalMessage.Write(length);
+                globalMessage.Write(data);
+
+                server.SendMessage(globalMessage, clients, NetDeliveryMethod.UnreliableSequenced, UCNetwork.VoiceSequenceChannel);
+            }
+        }
+        else if (type == MessageType.ConnectNetworkSync)
+        {
+            // There is a NetworkSync on this client that wants to start syncing over the network.
+            // These types of NetworkSyncs can come from having objects inside of scenes, which are being instantiated by loading a scene
+
+            // Structure for a voice data message
+            // Int - MessageType
+            // Float - X Position
+            // Float - Y Position
+            // Float - Z Position
+            // Float - X Rotation
+            // Float - Y Rotation
+            // Float - Z Rotation
+            // Float - W Rotation
+            float xPos = aMsg.ReadFloat();
+            float yPos = aMsg.ReadFloat();
+            float zPos = aMsg.ReadFloat();
+            float xRot = aMsg.ReadFloat();
+            float yRot = aMsg.ReadFloat();
+            float zRot = aMsg.ReadFloat();
+            float wRot = aMsg.ReadFloat();
+            string name = aMsg.ReadString();
+
+            Vector3 position = new Vector3(xPos, yPos, zPos);
+            Quaternion rotation = new Quaternion(xRot, yRot, zRot, wRot);
+
+            ClientData client = GetClientData(aMsg.SenderConnection.RemoteUniqueIdentifier);
+            //int areaId = client.areaIds[0]; // TODO: Which area do we start these objects in?
+
+            // Figure out if this network sync has already been assigned an id
+            int networkId = -1;
+            foreach (KeyValuePair<int, NetworkObject> obj in networkObjects)
+            {
+
+                if (obj.Value.initialPosition == position)
+                {
+                    // Hey! This is our object.
+                    networkId = obj.Key;
+                }
+            }
+
+            // Check if we need to start keeping track of this new object
+            if (networkId == -1)
+            {
+                // Send the new id back to the network sync
+                networkId = GetNewNetworkId();
+
+                // Send the message back to the client letting them know what the net sync id is
+                NetOutgoingMessage connectNetSyncMsg = server.CreateMessage();
+                connectNetSyncMsg.Write((int)MessageType.ConnectNetworkSync);
+                connectNetSyncMsg.Write(xPos);
+                connectNetSyncMsg.Write(yPos);
+                connectNetSyncMsg.Write(zPos);
+                connectNetSyncMsg.Write(xRot);
+                connectNetSyncMsg.Write(yRot);
+                connectNetSyncMsg.Write(zRot);
+                connectNetSyncMsg.Write(wRot);
+                connectNetSyncMsg.Write(name);
+                connectNetSyncMsg.Write(networkId);
+                server.SendMessage(connectNetSyncMsg, aMsg.SenderConnection, NetDeliveryMethod.ReliableOrdered);
+
+                // Create the network object
+                Debug.Log("Connecting new NetworkSync with a NetworkObject for client - " + aMsg.SenderConnection.RemoteUniqueIdentifier
+                + "\n\tNetworkId: " + networkId
+                + "\n\tPrefab: " + name
+                + "\n\tLoc: " + position.ToString()
+                + "\n\tOrientation: " + Quaternion.identity.eulerAngles.ToString()
+                );
+
+                // Tell the client that they own it
+                NetOutgoingMessage sendMsg = server.CreateMessage();
+                sendMsg.Write((int)MessageType.OwnershipGained);
+                sendMsg.Write(networkId);
+                server.SendMessage(sendMsg, client.connection, NetDeliveryMethod.ReliableOrdered);
+
+                // Set up our own logic for tracking which clients own which objects
+                client.ownedObjects.Add(networkId);
+
+                // Store the object in our NetworkObject list
+                NetworkObject newObject = new NetworkObject();
+                newObject.prefabName = name; // NOTE: These objects might not actually have prefabs
+
+                newObject.areaIds = new List<int>();
+                //newObject.areaIds.Add(areaId);
+
+                newObject.networkId = networkId;
+                newObject.position = position;
+                newObject.rotation = rotation;
+                newObject.followsClient = false;
+                newObject.latestSyncData = new byte[0];
+
+                newObject.initialPosition = position;
+                newObject.sceneObject = true;
+                if (networkObjects.ContainsKey(networkId))
+                {
+                    Debug.LogError("Network id collision when adding " + name + " for client " + aMsg.SenderConnection.RemoteUniqueIdentifier + " with id " + networkId);
+                    return;
+                }
+
+                networkObjects[networkId] = newObject;
+                // Let any other scripts on this object know we're adding the object
+                IntantiateObjectData iod = new IntantiateObjectData();
+                iod.netObjId = networkId;
+                SendMessage("OnInstantiateNetworkObject", iod);
+            }
+            else
+            {
+                // If this object already exists, let the client know it's network id and current status
+                // Send the message back to the client letting them know what the net sync id is
+                NetOutgoingMessage connectNetSyncMsg = server.CreateMessage();
+                connectNetSyncMsg.Write((int)MessageType.ConnectNetworkSync);
+                connectNetSyncMsg.Write(xPos);
+                connectNetSyncMsg.Write(yPos);
+                connectNetSyncMsg.Write(zPos);
+                connectNetSyncMsg.Write(xRot);
+                connectNetSyncMsg.Write(yRot);
+                connectNetSyncMsg.Write(zRot);
+                connectNetSyncMsg.Write(wRot);
+                connectNetSyncMsg.Write(name);
+                connectNetSyncMsg.Write(networkId);
+                server.SendMessage(connectNetSyncMsg, aMsg.SenderConnection, NetDeliveryMethod.ReliableOrdered);
+
+                // Create the network object
+                Debug.Log("Connecting NetworkSync with a NetworkObject for client - " + aMsg.SenderConnection.RemoteUniqueIdentifier
+                + "\n\tNetworkId: " + networkId
+                + "\n\tPrefab: " + name
+                + "\n\tLoc: " + position.ToString()
+                + "\n\tOrientation: " + Quaternion.identity.eulerAngles.ToString()
+                );
+
+                // Sync the data to this client
+                NetOutgoingMessage sendMsg = server.CreateMessage();
+                sendMsg.Write((int)MessageType.SyncUpdate);
+                sendMsg.Write((int)MessageReceiver.SingleClient);
+                sendMsg.Write(networkId);
+
+                sendMsg.Write(networkObjects[networkId].position.x);
+                sendMsg.Write(networkObjects[networkId].position.y);
+                sendMsg.Write(networkObjects[networkId].position.z);
+                sendMsg.Write(networkObjects[networkId].rotation.x);
+                sendMsg.Write(networkObjects[networkId].rotation.y);
+                sendMsg.Write(networkObjects[networkId].rotation.z);
+                sendMsg.Write(networkObjects[networkId].rotation.w);
+                sendMsg.Write(networkObjects[networkId].latestSyncData.Length);
+                sendMsg.Write(networkObjects[networkId].latestSyncData);
+
+                // Send the update to this single client
+                server.SendMessage(sendMsg, aMsg.SenderConnection, NetDeliveryMethod.ReliableSequenced, 0);
+            }
+
+        }
+        else
+        {
+            LogText("UnknownMessageType " + aMsg.SenderConnection.RemoteUniqueIdentifier + " " + aMsg.SenderConnection.RemoteEndPoint.Address);
+
+            Debug.LogError("Unhandled message type sent to server " + type.ToString());
+        }
+    }
+
+    protected override bool HandleSomeMessage_Data(NetIncomingMessage aMsg)
+    {
+        MessageType type = (MessageType)aMsg.PeekInt32();
+        if (type == MessageType.RPC)
+        {
+            StoreImportantMessageData(aMsg);
+        }
+        else if (type == MessageType.SyncUpdate || type == MessageType.LiteSyncUpdate)
+        {
+            StoreUnimportantMessageData(aMsg);
+        }
+        else if (type == MessageType.Instantiate)
+        {
+            StoreImportantMessageData(aMsg);
+        }
+        else if (type == MessageType.AddToArea)
+        {
+            StoreImportantMessageData(aMsg);
+        }
+        else if (type == MessageType.RemoveFromArea)
+        {
+            StoreImportantMessageData(aMsg);
+        }
+        else if (type == MessageType.AddObjectToArea)
+        {
+            StoreImportantMessageData(aMsg);
+        }
+        else if (type == MessageType.RemoveObjectFromArea)
+        {
+            StoreImportantMessageData(aMsg);
+        }
+        else if (type == MessageType.Destroy)
+        {
+            StoreImportantMessageData(aMsg);
+        }
+        else if (type == MessageType.VoiceData)
+        {
+            StoreImportantMessageData(aMsg);
+        }
+        else if (type == MessageType.ConnectNetworkSync)
+        {
+            StoreImportantMessageData(aMsg);
+        }
+        else
+        {
+            StoreImportantMessageData(aMsg);
+        }
+        return false;
+    }
+
     // Add the client to the given area
     public void AddToArea(long aClientId, int aNewAreaId)
     {
@@ -876,7 +1514,7 @@ public class ServerNetwork : UCNetwork
         Debug.Log("Client " + aClientId + " removed from area " + aAreaId);
 
         // Find new owners for these objects
-        //FindNewOwners(client, aAreaId);
+        FindNewOwners(client, aAreaId);
 
         NetOutgoingMessage sendMsg;
         // Tell the client to destroy any objects it is no longer in an area with
@@ -2060,6 +2698,12 @@ public class ServerNetwork : UCNetwork
         string temp = "";
         aMsg.ReadString(out temp);
 
+        bool logIt = true;
+        if (temp == "Heartbeat")
+        {
+            logIt = false;
+        }
+
         if (rpcCount.ContainsKey(temp))
         {
             rpcCount[temp]++;
@@ -2123,9 +2767,50 @@ public class ServerNetwork : UCNetwork
         }
 
         logMessage += " )\r\n";
-        LogText(logMessage);
-
+        if (logIt)
+        {
+            LogText(logMessage);
+        }
         aMsg.Position = originalPosition;
+    }
+
+    void StoreImportantMessageData(NetIncomingMessage aMsg)
+    {
+        heldImportantMessages.Add(aMsg);
+    }
+
+    void ProcessImportantMessageData()
+    {
+        int msgCount = connection.ReadMessages(heldImportantMessages);
+        base.FixedUpdate(heldImportantMessages, msgCount);
+    }
+
+    void StoreUnimportantMessageData(NetIncomingMessage aMsg)
+    {
+        MessageReceiver receiver = (MessageReceiver)aMsg.ReadUInt32();
+        int netId = aMsg.ReadInt32();
+        KeyValuePair<int, NetIncomingMessage> newMessage = new KeyValuePair<int, NetIncomingMessage>(netId, aMsg);
+        if (!heldUnimportantMessages.ContainsKey(netId))
+        {
+            heldUnimportantMessages.Add(newMessage.Key, newMessage.Value);
+        }
+    }
+
+    void ProcessUnimportantMessageData()
+    {
+        Dictionary<int, NetIncomingMessage>.ValueCollection values = heldUnimportantMessages.Values;
+        List<NetIncomingMessage> tempList = new List<NetIncomingMessage>();
+        foreach (var value in values)
+        {
+            tempList.Add(value);
+        }
+        int msgCount = connection.ReadMessages(tempList);
+        base.FixedUpdate(tempList, msgCount);
+    }
+
+    void DiscardMessage(NetIncomingMessage aMsg)
+    {
+        connection.Recycle(aMsg);
     }
 }
 
